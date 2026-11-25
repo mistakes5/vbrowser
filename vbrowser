@@ -1,0 +1,27 @@
+#!/bin/bash
+# vbrowser: agent-only GUI browser (Brave) on a virtual display inside a container.
+# Nothing here can move the host's pointer, focus or windows: all input goes to Xvfb :99.
+set -euo pipefail
+C=vbrowser; X() { docker exec -e DISPLAY=:99 "$C" "$@"; }
+case "${1:-help}" in
+  start)  docker info >/dev/null 2>&1 || colima start --vm-type vz --cpu 2 --memory 3 --disk 20 >/dev/null 2>&1
+          if docker container inspect "$C" >/dev/null 2>&1; then docker start "$C" >/dev/null; else
+          docker run -d --name "$C" --shm-size=1g --memory=2g --restart unless-stopped \
+            -p 127.0.0.1:9222:9222 -p 127.0.0.1:6080:6080 \
+            -v vbrowser-profile:/home/agent/profile vbrowser >/dev/null; fi
+          for _ in $(seq 30); do curl -sf localhost:9222/json/version >/dev/null && break; sleep 1; done
+          echo "cdp=http://127.0.0.1:9222 watch=http://127.0.0.1:6080/vnc.html" ;;
+  stop)   docker stop "$C" >/dev/null && echo stopped ;;
+  status) curl -sf localhost:9222/json/version | grep -E '"Browser"' || echo down ;;
+  cdp)    echo http://127.0.0.1:9222 ;;
+  open)   curl -sf -X PUT "localhost:9222/json/new?$2" >/dev/null && echo "opened $2" ;;
+  shot)   out=${2:-/tmp/vbrowser-$(date +%s).png}; X scrot -o /tmp/s.png; docker cp -q "$C:/tmp/s.png" "$out"; echo "$out" ;;
+  click)  X xdotool mousemove "$2" "$3" click "${4:-1}" ;;
+  dclick) X xdotool mousemove "$2" "$3" click --repeat 2 1 ;;
+  move)   X xdotool mousemove "$2" "$3" ;;
+  type)   shift; X xdotool type --delay 20 -- "$*" ;;
+  key)    shift; X xdotool key -- "$@" ;;          # e.g. ctrl+l Return
+  scroll) b=5; [ "${2:-down}" = up ] && b=4; X xdotool click --repeat "${3:-5}" $b ;;
+  size)   X xdotool getdisplaygeometry ;;
+  *) sed -n '2,3p' "$0"; echo "usage: vbrowser start|stop|status|cdp|open URL|shot [file]|click X Y [btn]|dclick X Y|move X Y|type TEXT|key KEYS..|scroll up|down [n]|size" ;;
+esac
